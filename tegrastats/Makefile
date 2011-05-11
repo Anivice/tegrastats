@@ -2,7 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-CFLAGS 	= -DNV_IS_LDK=1
+CFLAGS 	+= -DNV_IS_LDK=1
 TARGET	= tegrastats
 SRC	= main.c
 
