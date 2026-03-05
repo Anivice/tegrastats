@@ -5,13 +5,19 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <string.h>
+
+#ifndef NV_IS_LDK
+#define NV_IS_LDK 1
+#endif
+
+#include <errno.h>
 
 #if !NV_IS_LDK
     #include <utils/Log.h>
     #undef LOG_TAG
     #define LOG_TAG "TegraStats"
 #else
-    #include <string.h>
     #define LOGE(...) \
     do { \
         printf(__VA_ARGS__); \
@@ -30,22 +36,44 @@
 #define NVMAP_BASE_PATH "/sys/devices/platform/tegra-nvmap/misc/nvmap/"
 #define CARVEOUT(x) NVMAP_BASE_PATH "heap-generic-0/" # x
 #define IRAM(x)     NVMAP_BASE_PATH "heap-iram/" # x
-
-#define DVFS_CLOCKS_BASE_PATH "/sys/kernel/debug/clock/"
-#define EMCCLK DVFS_CLOCKS_BASE_PATH "emc/rate"
-#define AVPCLK DVFS_CLOCKS_BASE_PATH "avp.sclk/rate"
-#define VDECLK DVFS_CLOCKS_BASE_PATH "vde/rate"
-
 #define CPU_TEMPERATURE_PATH "/sys/class/hwmon/hwmon0/device/ext_temperature"
 
-#define READ_VALUE(path, pvalue) {              \
-    f = fopen(path, "r");                       \
-    if (f) {                                    \
-        (void) fscanf(f, "%d", pvalue);         \
-        fclose(f);                              \
-    } else {                                    \
-        LOGE("Failed to open %s", path);        \
-    }                                           \
+static int read_int_file(const char* path, int* out)
+{
+    FILE* f = fopen(path, "r");
+    if (!f) return -errno;
+    if (fscanf(f, "%d", out) != 1) { fclose(f); return -1; }
+    fclose(f);
+    return 0;
+}
+
+static int read_float_file(const char* path, float* out)
+{
+    FILE* f = fopen(path, "r");
+    if (!f) return -errno;
+    if (fscanf(f, "%f", out) != 1) { fclose(f); return -1; }
+    fclose(f);
+    return 0;
+}
+
+static int read_first_int(const char* const* paths, size_t n, int* out, int debug)
+{
+    for (size_t i = 0; i < n; i++) {
+        int rc = read_int_file(paths[i], out);
+        if (rc == 0) return 0;
+        if (debug) LOGE("Failed to open %s", paths[i]);
+    }
+    return -1;
+}
+
+static int read_first_float(const char* const* paths, size_t n, float* out, int debug)
+{
+    for (size_t i = 0; i < n; i++) {
+        int rc = read_float_file(paths[i], out);
+        if (rc == 0) return 0;
+        if (debug) LOGE("Failed to open %s", paths[i]);
+    }
+    return -1;
 }
 
 /* Prototypes. */
@@ -262,6 +290,7 @@ int main(int argc, char *argv[])
         int largestFreeGARTBlockkB = -1, totalIRAMB = -1, freeIRAMB = -1;
         int largestFreeIRAMBlockB = -1, currCpuFreq = -1;
         int emcClk = -1, avpClk = -1, vdeClk = -1;
+        int gpuFreqHz = -1, gpuLoad10 = -1;
         float currCpuTemp = 0.0;
 
         if ( totalSec )
@@ -279,7 +308,7 @@ int main(int argc, char *argv[])
             fclose(f);
         }
         else
-            LOGE("Failed to open /proc/meminfo");
+            if (debug) LOGE("Failed to open /sys/devices/system/cpu/cpu0/online");
         f = fopen("/proc/buddyinfo", "r");
         if(f)
         {
@@ -323,7 +352,7 @@ int main(int argc, char *argv[])
             largestFreeRAMBlockB = (1 << i) * PAGE_SIZE;
         }
         else
-            LOGE("Failed to open /proc/buddyinfo");
+            if (debug) LOGE("Failed to open /sys/devices/system/cpu/cpu1/online");
 
         // CPU 0/1 On/Off
         f = fopen("/sys/devices/system/cpu/cpu0/online", "r");
@@ -417,29 +446,21 @@ int main(int argc, char *argv[])
         }
         else
             LOGE("Failed to open /proc/stat");
+        (void)read_int_file(CARVEOUT(total_size), &totalCarveoutB);
+        (void)read_int_file(CARVEOUT(free_size),  &freeCarveoutB);
+        (void)read_int_file(CARVEOUT(free_max),   &largestFreeCarveoutBlockB);
 
-        // Carveout
-        READ_VALUE(CARVEOUT(total_size), &totalCarveoutB);
-        READ_VALUE(CARVEOUT(free_size),  &freeCarveoutB);
-        READ_VALUE(CARVEOUT(free_max),   &largestFreeCarveoutBlockB);
-
-        // GART
         f = fopen("/proc/iovmminfo", "r");
-        if(f)
-        {
-            // add if (blah) {} to get around compiler warning
+        if (f) {
             if (fscanf(f, "\ngroups\n\t<unnamed> (device: iovmm-gart)"
                           "\n\t\tsize: %dKiB free: %dKiB largest: %dKiB",
                        &totalGARTkB, &freeGARTkB, &largestFreeGARTBlockkB)) {}
             fclose(f);
         }
-        else
-            LOGE("Failed to open /proc/iovmminfo");
 
-        // IRAM
-        READ_VALUE(IRAM(total_size), &totalIRAMB);
-        READ_VALUE(IRAM(free_size),  &freeIRAMB);
-        READ_VALUE(IRAM(free_max),   &largestFreeIRAMBlockB);
+        (void)read_int_file(IRAM(total_size), &totalIRAMB);
+        (void)read_int_file(IRAM(free_size),  &freeIRAMB);
+        (void)read_int_file(IRAM(free_max),   &largestFreeIRAMBlockB);
 
         // CPU Frequency
         f = fopen("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_cur_freq", "r");
@@ -450,21 +471,62 @@ int main(int argc, char *argv[])
         }
 
         // CPU Temperature
-        f = fopen( CPU_TEMPERATURE_PATH, "r");
-        if ( f )
         {
-            hasCPUTemp = 1;
-            (void) fscanf( f, "%f", &currCpuTemp );
-            fclose( f );
+            const char* const temp_paths[] = {
+                CPU_TEMPERATURE_PATH,
+                "/sys/class/thermal/thermal_zone0/temp",
+                "/sys/class/thermal/thermal_zone1/temp",
+            };
+            float t = 0.0f;
+            if (read_first_float(temp_paths, sizeof(temp_paths)/sizeof(temp_paths[0]), &t, 0) == 0) {
+                if (t > 1000.0f) t = t / 1000.0f;
+                currCpuTemp = t;
+                hasCPUTemp = 1;
+            }
         }
 
         // DFS
-        READ_VALUE(EMCCLK, &emcClk);
-        READ_VALUE(AVPCLK, &avpClk);
-        READ_VALUE(VDECLK, &vdeClk);
+        {
+            const char* const emc_paths[] = {
+                "/sys/kernel/debug/bpmp/debug/clk/emc/rate",
+                "/sys/kernel/debug/clock/emc/rate",
+                "/sys/class/devfreq/emc/cur_freq",
+                "/sys/class/devfreq/tegra_emc/cur_freq",
+            };
+            const char* const avp_paths[] = {
+                "/sys/kernel/debug/bpmp/debug/clk/avp.sclk/rate",
+                "/sys/kernel/debug/clock/avp.sclk/rate",
+            };
+            const char* const vde_paths[] = {
+                "/sys/kernel/debug/bpmp/debug/clk/vde/rate",
+                "/sys/kernel/debug/clock/vde/rate",
+            };
+            (void)read_first_int(emc_paths, sizeof(emc_paths)/sizeof(emc_paths[0]), &emcClk, debug);
+            (void)read_first_int(avp_paths, sizeof(avp_paths)/sizeof(avp_paths[0]), &avpClk, debug);
+            (void)read_first_int(vde_paths, sizeof(vde_paths)/sizeof(vde_paths[0]), &vdeClk, debug);
+        }
+
+        {
+            const char* const gpu_freq_paths[] = {
+                "/sys/class/devfreq/57000000.gpu/cur_freq",
+                "/sys/devices/57000000.gpu/devfreq/57000000.gpu/cur_freq",
+                "/sys/devices/platform/host1x/57000000.gpu/devfreq/57000000.gpu/cur_freq",
+            };
+            const char* const gpu_load_paths[] = {
+                "/sys/devices/57000000.gpu/load",
+                "/sys/devices/gpu.0/load",
+                "/sys/devices/platform/host1x/57000000.gpu/load",
+            };
+            (void)read_first_int(gpu_freq_paths, sizeof(gpu_freq_paths)/sizeof(gpu_freq_paths[0]), &gpuFreqHz, debug);
+            (void)read_first_int(gpu_load_paths, sizeof(gpu_load_paths)/sizeof(gpu_load_paths[0]), &gpuLoad10, debug);
+        }
+
         {
             char cpu0String[5], cpu1String[5];
             char lfbRAM[10], lfbCarveout[10], lfbGART[10], lfbIRAM[10];
+            int gpuPct = (gpuLoad10 >= 0) ? (gpuLoad10 / 10) : -1;
+            int gpuMHz = (gpuFreqHz >= 0) ? (gpuFreqHz / 1000000) : -1;
+
             if(isCpu0Active)
                 snprintf(cpu0String, 5, "%d%%", cpu0Load);
             else
@@ -474,15 +536,19 @@ int main(int argc, char *argv[])
             else
                 snprintf(cpu1String, 5, "off");
             SmartB2Str(lfbRAM, 10, largestFreeRAMBlockB);
-            SmartB2Str(lfbCarveout, 10, largestFreeCarveoutBlockB);
-            SmartB2Str(lfbGART, 10, largestFreeGARTBlockkB * 1024);
-            SmartB2Str(lfbIRAM, 10, largestFreeIRAMBlockB);
+            if (largestFreeCarveoutBlockB >= 0) SmartB2Str(lfbCarveout, 10, largestFreeCarveoutBlockB);
+            if (largestFreeGARTBlockkB >= 0) SmartB2Str(lfbGART, 10, largestFreeGARTBlockkB * 1024);
+            if (largestFreeIRAMBlockB >= 0) SmartB2Str(lfbIRAM, 10, largestFreeIRAMBlockB);
 
-            if ( hasCPUTemp )
+            int hasExtraMem = (totalCarveoutB >= 0 && freeCarveoutB >= 0 &&
+                               totalGARTkB >= 0 && freeGARTkB >= 0 &&
+                               totalIRAMB >= 0 && freeIRAMB >= 0);
+
+            if ( hasCPUTemp && hasExtraMem )
             {
                 LOGE( "RAM %d/%dMB (lfb %dx%s) Carveout %d/%dMB (lfb %s) "
                       "GART %d/%dMB (lfb %s) IRAM %d/%dkB (lfb %s) "
-                      "cpu [%s,%s]@%d (%.2fC) EMC %d AVP %d VDE %d",
+                      "cpu [%s,%s]@%d (%.2fC) EMC %d AVP %d VDE %d GPU %d%%@%dMHz",
                     kB2MB( totalRAMkB - freeRAMkB - buffersRAMkB - cachedRAMkB),
                     kB2MB( totalRAMkB ),
                     numLargestRAMBlock,
@@ -498,29 +564,28 @@ int main(int argc, char *argv[])
                     lfbIRAM,
                     cpu0String, cpu1String,
                     currCpuFreq, currCpuTemp,
-                    emcClk, avpClk, vdeClk );
+                    emcClk, avpClk, vdeClk, gpuPct, gpuMHz );
             }
-            else
+            else if ( hasCPUTemp )
             {
-                LOGE( "RAM %d/%dMB (lfb %dx%s) Carveout %d/%dMB (lfb %s) "
-                      "GART %d/%dMB (lfb %s) IRAM %d/%dkB (lfb %s) "
-                      "cpu [%s,%s]@%d EMC %d AVP %d VDE %d",
+                LOGE( "RAM %d/%dMB (lfb %dx%s) cpu %d (%.2fC) EMC %d AVP %d VDE %d GPU %d%%@%dMHz",
                     kB2MB( totalRAMkB - freeRAMkB - buffersRAMkB - cachedRAMkB),
                     kB2MB( totalRAMkB ),
                     numLargestRAMBlock,
                     lfbRAM,
-                    B2MB( totalCarveoutB - freeCarveoutB ),
-                    B2MB( totalCarveoutB ),
-                    lfbCarveout,
-                    kB2MB( totalGARTkB - freeGARTkB ),
-                    kB2MB( totalGARTkB ),
-                    lfbGART,
-                    B2kB( totalIRAMB - freeIRAMB ),
-                    B2kB( totalIRAMB ),
-                    lfbIRAM,
+                    currCpuFreq, currCpuTemp,
+                    emcClk, avpClk, vdeClk, gpuPct, gpuMHz );
+            }
+            else
+            {
+                LOGE( "RAM %d/%dMB (lfb %dx%s) cpu [%s,%s]@%d EMC %d AVP %d VDE %d GPU %d%%@%dMHz",
+                    kB2MB( totalRAMkB - freeRAMkB - buffersRAMkB - cachedRAMkB),
+                    kB2MB( totalRAMkB ),
+                    numLargestRAMBlock,
+                    lfbRAM,
                     cpu0String, cpu1String,
                     currCpuFreq,
-                    emcClk, avpClk, vdeClk );
+                    emcClk, avpClk, vdeClk, gpuPct, gpuMHz );
             }
         }
 
