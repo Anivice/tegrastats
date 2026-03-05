@@ -38,6 +38,51 @@
 #define IRAM(x)     NVMAP_BASE_PATH "heap-iram/" # x
 #define CPU_TEMPERATURE_PATH "/sys/class/hwmon/hwmon0/device/ext_temperature"
 
+#include <errno.h>
+
+#define CLK_SUMMARY_PATH "/sys/kernel/debug/clk/clk_summary"
+
+static int read_clk_summary_rate_hz(const char* clk_name,
+                                    unsigned int* enable_cnt,
+                                    unsigned long long* rate_hz)
+{
+    FILE* f = fopen(CLK_SUMMARY_PATH, "r");
+    if (!f) return -errno;
+
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
+        if (strstr(line, "*[")) continue;
+
+        char name[128] = {0};
+        unsigned int en = 0, prep = 0;
+        unsigned long long rate = 0, req = 0;
+
+        int n = sscanf(line, " %127s %u %u %llu %llu", name, &en, &prep, &rate, &req);
+        if (n >= 4 && strcmp(name, clk_name) == 0) {
+            if (enable_cnt) *enable_cnt = en;
+            if (rate_hz) *rate_hz = rate;
+            fclose(f);
+            return 0;
+        }
+    }
+
+    fclose(f);
+    return -1;
+}
+
+static int read_clk_mhz_or_zero_if_disabled(const char* clk_name, int debug)
+{
+    unsigned int en = 0;
+    unsigned long long hz = 0;
+    int rc = read_clk_summary_rate_hz(clk_name, &en, &hz);
+    if (rc != 0) {
+        if (debug) LOGE("clk_summary: missing %s", clk_name);
+        return -1;
+    }
+    if (en == 0) return 0;
+    return (int)(hz / 1000000ULL); // MHz
+}
+
 static int read_int_file(const char* path, int* out)
 {
     FILE* f = fopen(path, "r");
@@ -488,6 +533,7 @@ int main(int argc, char *argv[])
         // DFS
         {
             const char* const emc_paths[] = {
+                "/sys/kernel/debug/tegra_bwmgr/emc_rate",
                 "/sys/kernel/debug/bpmp/debug/clk/emc/rate",
                 "/sys/kernel/debug/clock/emc/rate",
                 "/sys/class/devfreq/emc/cur_freq",
@@ -502,8 +548,10 @@ int main(int argc, char *argv[])
                 "/sys/kernel/debug/clock/vde/rate",
             };
             (void)read_first_int(emc_paths, sizeof(emc_paths)/sizeof(emc_paths[0]), &emcClk, debug);
-            (void)read_first_int(avp_paths, sizeof(avp_paths)/sizeof(avp_paths[0]), &avpClk, debug);
-            (void)read_first_int(vde_paths, sizeof(vde_paths)/sizeof(vde_paths[0]), &vdeClk, debug);
+            avpClk = read_clk_mhz_or_zero_if_disabled("avp.sclk", debug);
+            vdeClk = read_clk_mhz_or_zero_if_disabled("nvdec", debug);
+            // (void)read_first_int(avp_paths, sizeof(avp_paths)/sizeof(avp_paths[0]), &avpClk, debug);
+            // (void)read_first_int(vde_paths, sizeof(vde_paths)/sizeof(vde_paths[0]), &vdeClk, debug);
         }
 
         {
