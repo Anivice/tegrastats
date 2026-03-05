@@ -353,7 +353,7 @@ int main(int argc, char *argv[])
             fclose(f);
         }
         else
-            if (debug) LOGE("Failed to open /sys/devices/system/cpu/cpu0/online");
+            if (debug) LOGE("Failed to open /proc/meminfo");
         f = fopen("/proc/buddyinfo", "r");
         if(f)
         {
@@ -397,7 +397,7 @@ int main(int argc, char *argv[])
             largestFreeRAMBlockB = (1 << i) * PAGE_SIZE;
         }
         else
-            if (debug) LOGE("Failed to open /sys/devices/system/cpu/cpu1/online");
+            if (debug) LOGE("Failed to open /proc/buddyinfo");
 
         // CPU 0/1 On/Off
         f = fopen("/sys/devices/system/cpu/cpu0/online", "r");
@@ -408,7 +408,7 @@ int main(int argc, char *argv[])
             fclose(f);
         }
         else
-            LOGE("Failed to open /proc/meminfo");
+            LOGE("Failed to open /sys/devices/system/cpu/cpu1/online");
 
         f = fopen("/sys/devices/system/cpu/cpu1/online", "r");
         if(f)
@@ -418,7 +418,7 @@ int main(int argc, char *argv[])
             fclose(f);
         }
         else
-            LOGE("Failed to open /proc/meminfo");
+            LOGE("Failed to open /sys/devices/system/cpu/cpu1/online");
 
         // CPU load
         f = fopen("/proc/stat", "r");
@@ -574,6 +574,8 @@ int main(int argc, char *argv[])
             char lfbRAM[10], lfbCarveout[10], lfbGART[10], lfbIRAM[10];
             int gpuPct = (gpuLoad10 >= 0) ? (gpuLoad10 / 10) : -1;
             int gpuMHz = (gpuFreqHz >= 0) ? (gpuFreqHz / 1000000) : -1;
+            int cpuMHz = (currCpuFreq >= 0) ? (currCpuFreq / 1000) : -1;      // kHz -> MHz
+            int emcMHz = (emcClk >= 0) ? (emcClk / 1000000) : -1;             // Hz  -> MHz
 
             if(isCpu0Active)
                 snprintf(cpu0String, 5, "%d%%", cpu0Load);
@@ -596,7 +598,7 @@ int main(int argc, char *argv[])
             {
                 LOGE( "RAM %d/%dMB (lfb %dx%s) Carveout %d/%dMB (lfb %s) "
                       "GART %d/%dMB (lfb %s) IRAM %d/%dkB (lfb %s) "
-                      "cpu [%s,%s]@%d (%.2fC) EMC %d AVP %d VDE %d GPU %d%%@%dMHz",
+                      "cpu [%s,%s]@%dMHz (%.2fC) EMC %dMHz AVP %dMHz NVDEC %dMHz GPU %d%%@%dMHz",
                     kB2MB( totalRAMkB - freeRAMkB - buffersRAMkB - cachedRAMkB),
                     kB2MB( totalRAMkB ),
                     numLargestRAMBlock,
@@ -612,28 +614,28 @@ int main(int argc, char *argv[])
                     lfbIRAM,
                     cpu0String, cpu1String,
                     currCpuFreq, currCpuTemp,
-                    emcClk, avpClk, vdeClk, gpuPct, gpuMHz );
+                    emcMHz, avpClk, vdeClk, gpuPct, gpuMHz );
             }
             else if ( hasCPUTemp )
             {
-                LOGE( "RAM %d/%dMB (lfb %dx%s) cpu %d (%.2fC) EMC %d AVP %d VDE %d GPU %d%%@%dMHz",
+                LOGE( "RAM %d/%dMB (lfb %dx%s) cpu %dMHz (%.2fC) EMC %dMHz AVP %dMHz NVDEC %dMHz GPU %d%%@%dMHz",
                     kB2MB( totalRAMkB - freeRAMkB - buffersRAMkB - cachedRAMkB),
                     kB2MB( totalRAMkB ),
                     numLargestRAMBlock,
                     lfbRAM,
                     currCpuFreq, currCpuTemp,
-                    emcClk, avpClk, vdeClk, gpuPct, gpuMHz );
+                    emcMHz, avpClk, vdeClk, gpuPct, gpuMHz );
             }
             else
             {
-                LOGE( "RAM %d/%dMB (lfb %dx%s) cpu [%s,%s]@%d EMC %d AVP %d VDE %d GPU %d%%@%dMHz",
+                LOGE( "RAM %d/%dMB (lfb %dx%s) cpu [%s,%s] %dMHz EMC %dMHz AVP %dMHz NVDEC %dMHz GPU %d%%@%dMHz",
                     kB2MB( totalRAMkB - freeRAMkB - buffersRAMkB - cachedRAMkB),
                     kB2MB( totalRAMkB ),
                     numLargestRAMBlock,
                     lfbRAM,
                     cpu0String, cpu1String,
-                    currCpuFreq,
-                    emcClk, avpClk, vdeClk, gpuPct, gpuMHz );
+                    cpuMHz,
+                    emcMHz, avpClk, vdeClk, gpuPct, gpuMHz );
             }
         }
 
