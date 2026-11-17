@@ -2,14 +2,24 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-CFLAGS 	+= -DNV_IS_LDK=1
-TARGET	= tegrastats
-SRC	= main.c
+TARGET   := tegrastats
+SOURCES  := $(wildcard src/*.c)
+OBJECTS  := $(SOURCES:.c=.o)
+DEPENDS  := $(OBJECTS:.o=.d)
 
-$(TARGET): $(SRC)
-	$(CC) $(CFLAGS) -o $@ $^
+CPPFLAGS += -Iinclude
+CFLAGS   ?= -O2
+CFLAGS   += -std=c11 -Wall -Wextra -Wpedantic
+
+$(TARGET): $(OBJECTS)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+src/%.o: src/%.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c -o $@ $<
 
 clean:
-	$(RM) $(TARGET)
+	$(RM) $(TARGET) $(OBJECTS) $(DEPENDS)
 
-.PHONY:	clean
+-include $(DEPENDS)
+
+.PHONY: clean
